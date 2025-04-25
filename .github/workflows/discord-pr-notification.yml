@@ -24,106 +24,115 @@ jobs:
 
           if [ "$EVENT_NAME" = "pull_request" ]; then
             ACTION="${{ github.event.action }}"
-            TITLE=$(jq -r .pull_request.title "$GITHUB_EVENT_PATH" | sed 's/"/\\"/g')
+            TITLE=$(echo "${{ github.event.pull_request.title }}" | sed 's/"/\\"/g')
             URL="${{ github.event.pull_request.html_url }}"
             
             if [ "$ACTION" = "opened" ]; then
-              MESSAGE=":sparkles: 새로운 Pull Request가 생성되었습니다!\n제목: **$TITLE**\nURL: $URL"
+              MESSAGE=":sparkles: 새로운 Pull Request가 생성되었습니다!\\n제목: **$TITLE**\\nURL: $URL"
             elif [ "$ACTION" = "reopened" ]; then
-              MESSAGE=":repeat: Pull Request가 다시 열렸습니다!\n제목: **$TITLE**\nURL: $URL"
+              MESSAGE=":repeat: Pull Request가 다시 열렸습니다!\\n제목: **$TITLE**\\nURL: $URL"
             elif [ "$ACTION" = "closed" ]; then
-              MERGED=$(jq -r .pull_request.merged "$GITHUB_EVENT_PATH")
-              if [ "$MERGED" = "true" ]; then
-                MESSAGE=":white_check_mark: Pull Request가 머지되었습니다!\n제목: **$TITLE**\nURL: $URL"
+              if [ "${{ github.event.pull_request.merged }}" = "true" ]; then
+                MESSAGE=":white_check_mark: Pull Request가 머지되었습니다!\\n제목: **$TITLE**\\nURL: $URL"
               else
-                MESSAGE=":x: Pull Request가 닫혔습니다.\n제목: **$TITLE**\nURL: $URL"
+                MESSAGE=":x: Pull Request가 닫혔습니다.\\n제목: **$TITLE**\\nURL: $URL"
               fi
             fi
           
           elif [ "$EVENT_NAME" = "pull_request_review" ]; then
-            REVIEWER=$(jq -r .review.user.login "$GITHUB_EVENT_PATH" | sed 's/"/\\"/g')
-            REVIEW_STATE=$(jq -r .review.state "$GITHUB_EVENT_PATH")
-            TITLE=$(jq -r .pull_request.title "$GITHUB_EVENT_PATH" | sed 's/"/\\"/g')
+            REVIEWER="${{ github.event.review.user.login }}"
+            REVIEW_STATE="${{ github.event.review.state }}"
+            TITLE=$(echo "${{ github.event.pull_request.title }}" | sed 's/"/\\"/g')
             URL="${{ github.event.pull_request.html_url }}"
-            COMMENT=$(jq -r .review.body "$GITHUB_EVENT_PATH" | sed 's/"/\\"/g' | head -c 200)
+            COMMENT=$(echo "${{ github.event.review.body }}" | sed 's/"/\\"/g' | tr '\n' ' ' | cut -c 1-200)
             
             if [ "$REVIEW_STATE" = "approved" ]; then
               if [ -n "$COMMENT" ] && [ "$COMMENT" != "null" ]; then
-                MESSAGE=":white_check_mark: **$REVIEWER**님이 Pull Request를 승인했습니다!\n코멘트: $COMMENT\nPull Request: **$TITLE**\nURL: $URL"
+                MESSAGE=":white_check_mark: **$REVIEWER**님이 Pull Request를 승인했습니다!\\n코멘트: $COMMENT\\nPull Request: **$TITLE**\\nURL: $URL"
               else
-                MESSAGE=":white_check_mark: **$REVIEWER**님이 Pull Request를 승인했습니다!\nPull Request: **$TITLE**\nURL: $URL"
+                MESSAGE=":white_check_mark: **$REVIEWER**님이 Pull Request를 승인했습니다!\\nPull Request: **$TITLE**\\nURL: $URL"
               fi
             elif [ "$REVIEW_STATE" = "changes_requested" ]; then
-              MESSAGE=":warning: **$REVIEWER**님이 Pull Request에 변경을 요청했습니다!\nPull Request: **$TITLE**\nURL: $URL"
+              MESSAGE=":warning: **$REVIEWER**님이 Pull Request에 변경을 요청했습니다!\\nPull Request: **$TITLE**\\nURL: $URL"
             else
               if [ -n "$COMMENT" ] && [ "$COMMENT" != "null" ]; then
-                MESSAGE=":speech_balloon: **$REVIEWER**님이 리뷰 코멘트를 남겼습니다!\nPull Request: **$TITLE**\n코멘트: $COMMENT\nURL: $URL"
+                MESSAGE=":speech_balloon: **$REVIEWER**님이 리뷰 코멘트를 남겼습니다!\\nPull Request: **$TITLE**\\n코멘트: $COMMENT\\nURL: $URL"
               fi
             fi
           
           elif [ "$EVENT_NAME" = "issue_comment" ]; then
             # PR 댓글인지 확인
-            if jq -e '.issue.pull_request' "$GITHUB_EVENT_PATH" > /dev/null; then
-              AUTHOR=$(jq -r .comment.user.login "$GITHUB_EVENT_PATH" | sed 's/"/\\"/g')
+            if [ -n "${{ github.event.issue.pull_request }}" ]; then
+              AUTHOR="${{ github.event.comment.user.login }}"
               # 봇 댓글 필터링
               if [[ "$AUTHOR" == *[Bb][Oo][Tt]* ]]; then
                 echo "Bot comment detected, skipping notification"
                 exit 0
               fi
               
-              COMMENT=$(jq -r .comment.body "$GITHUB_EVENT_PATH" | sed 's/"/\\"/g' | head -c 200)
+              COMMENT=$(echo "${{ github.event.comment.body }}" | sed 's/"/\\"/g' | tr '\n' ' ' | cut -c 1-200)
               COMMENT_TRUNCATED=$([ ${#COMMENT} -gt 200 ] && echo "... (더 보려면 링크 클릭)" || echo "")
               CMT_URL="${{ github.event.comment.html_url }}"
-              TITLE=$(jq -r .issue.title "$GITHUB_EVENT_PATH" | sed 's/"/\\"/g')
+              TITLE=$(echo "${{ github.event.issue.title }}" | sed 's/"/\\"/g')
               
               # 답글 여부 확인 개선
-              IN_REPLY_TO=$(jq -r '.comment.in_reply_to_id // empty' "$GITHUB_EVENT_PATH")
-              if [ -z "$IN_REPLY_TO" ]; then
-                MESSAGE=":speech_balloon: **$AUTHOR**님이 PR에 새 코멘트를 남겼습니다!\nPR: **$TITLE**\n코멘트: $COMMENT$COMMENT_TRUNCATED\nURL: $CMT_URL"
+              if [ -z "${{ github.event.comment.in_reply_to_id }}" ]; then
+                MESSAGE=":speech_balloon: **$AUTHOR**님이 PR에 새 코멘트를 남겼습니다!\\nPR: **$TITLE**\\n코멘트: $COMMENT$COMMENT_TRUNCATED\\nURL: $CMT_URL"
               else
-                MESSAGE=":repeat: **$AUTHOR**님이 PR 코멘트에 답글을 남겼습니다!\nPR: **$TITLE**\n답글: $COMMENT$COMMENT_TRUNCATED\nURL: $CMT_URL"
+                MESSAGE=":repeat: **$AUTHOR**님이 PR 코멘트에 답글을 남겼습니다!\\nPR: **$TITLE**\\n답글: $COMMENT$COMMENT_TRUNCATED\\nURL: $CMT_URL"
               fi
             fi
           
           elif [ "$EVENT_NAME" = "push" ]; then
             # 봇 커밋 필터링
-            AUTHOR=$(jq -r .head_commit.author.name "$GITHUB_EVENT_PATH" | sed 's/"/\\"/g')
+            AUTHOR="${{ github.event.head_commit.author.name }}"
             if [[ "$AUTHOR" == *[Bb][Oo][Tt]* ]]; then
               echo "Bot push detected, skipping notification"
               exit 0
             fi
             
-            COMMIT_MESSAGE=$(jq -r .head_commit.message "$GITHUB_EVENT_PATH" | sed 's/"/\\"/g' | head -c 200)
+            COMMIT_MESSAGE=$(echo "${{ github.event.head_commit.message }}" | sed 's/"/\\"/g' | tr '\n' ' ' | cut -c 1-200)
             COMMIT_MESSAGE_TRUNCATED=$([ ${#COMMIT_MESSAGE} -gt 200 ] && echo "... (더 보려면 링크 클릭)" || echo "")
             COMMIT_URL="${{ github.event.head_commit.url }}"
             REPO="${{ github.repository }}"
             
-            MESSAGE=":rocket: **$REPO** 저장소의 main 브랜치에 새 커밋!\n작성자: **$AUTHOR**\n메시지: $COMMIT_MESSAGE$COMMIT_MESSAGE_TRUNCATED\nURL: $COMMIT_URL"
+            MESSAGE=":rocket: **$REPO** 저장소의 main 브랜치에 새 커밋!\\n작성자: **$AUTHOR**\\n메시지: $COMMIT_MESSAGE$COMMIT_MESSAGE_TRUNCATED\\nURL: $COMMIT_URL"
           fi
 
           # 메시지가 비어있지 않은 경우에만 출력
           if [ -n "$MESSAGE" ]; then
             # 2000자 제한 적용
             MESSAGE="${MESSAGE:0:1950}"
-            # JSON으로 이스케이프된 메시지 생성
-            JSON_MESSAGE=$(jq -n --arg msg "$MESSAGE" '{content: $msg}')
-            echo "discord_payload=$JSON_MESSAGE" >> $GITHUB_OUTPUT
+            # 환경에 저장
             echo "has_message=true" >> $GITHUB_OUTPUT
+            echo "discord_message=$MESSAGE" >> $GITHUB_OUTPUT
           else
             echo "has_message=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Send notification to Discord
         if: steps.set_message.outputs.has_message == 'true'
+        env:
+          DISCORD_MESSAGE: ${{ steps.set_message.outputs.discord_message }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          HTTP_RESPONSE=$(curl -s -w "%{http_code}" -o response.txt \
-            -H "Content-Type: application/json" \
-            -d '${{ steps.set_message.outputs.discord_payload }}' \
-            ${{ secrets.DISCORD_WEBHOOK_URL }})
+          # 정확한 JSON 형식으로 페이로드 생성
+          payload=$(cat <<EOF
+          {
+            "content": "$DISCORD_MESSAGE"
+          }
+          EOF
+          )
+          
+          # -f 옵션으로 응답을 확인하고 실패 시 출력
+          response=$(curl -s -f -H "Content-Type: application/json" \
+            -d "$payload" \
+            "$DISCORD_WEBHOOK_URL" || echo "FAILED")
             
-          if [ "$HTTP_RESPONSE" -ne 204 ]; then
-            echo "Discord webhook failed with status $HTTP_RESPONSE:"
-            cat response.txt
+          if [[ "$response" == "FAILED" ]]; then
+            echo "Discord webhook failed"
+            echo "Payload was:"
+            echo "$payload" | sed 's/"content": ".*"/"content": "[REDACTED]"/'
             exit 1
           else
             echo "Discord notification sent successfully!"
