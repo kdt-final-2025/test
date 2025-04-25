@@ -5,6 +5,8 @@ on:
     types: [opened, closed, reopened]
   pull_request_review:
     types: [submitted]
+  pull_request_review_comment:
+    types: [created]
   issue_comment:
     types: [created]
   push:
@@ -60,6 +62,23 @@ jobs:
               fi
             fi
           
+          elif [ "$EVENT_NAME" = "pull_request_review_comment" ]; then
+            # 파일의 특정 라인에 대한 단일 코멘트 처리
+            AUTHOR="${{ github.event.comment.user.login }}"
+            # 봇 댓글 필터링
+            if [[ "$AUTHOR" == *[Bb][Oo][Tt]* ]]; then
+              echo "Bot comment detected, skipping notification"
+              exit 0
+            fi
+            
+            PR_TITLE=$(echo "${{ github.event.pull_request.title }}" | sed 's/"/\\"/g')
+            COMMENT_BODY=$(echo "${{ github.event.comment.body }}" | sed 's/"/\\"/g' | tr '\n' ' ' | cut -c 1-200)
+            COMMENT_URL="${{ github.event.comment.html_url }}"
+            FILE_PATH="${{ github.event.comment.path }}"
+            LINE="${{ github.event.comment.line }}"
+            
+            MESSAGE=":mag: **$AUTHOR**님이 파일 코드 라인에 코멘트를 남겼습니다!\\nPR: **$PR_TITLE**\\n파일: \`$FILE_PATH:$LINE\`\\n코멘트: $COMMENT_BODY\\nURL: $COMMENT_URL"
+          
           elif [ "$EVENT_NAME" = "issue_comment" ]; then
             # PR 댓글인지 확인
             if [ -n "${{ github.event.issue.pull_request }}" ]; then
@@ -97,6 +116,14 @@ jobs:
             REPO="${{ github.repository }}"
             
             MESSAGE=":rocket: **$REPO** 저장소의 main 브랜치에 새 커밋!\\n작성자: **$AUTHOR**\\n메시지: $COMMIT_MESSAGE$COMMIT_MESSAGE_TRUNCATED\\nURL: $COMMIT_URL"
+          fi
+
+          # 디버깅용 이벤트 구조 출력 (로그에만 표시)
+          echo "Event name: $EVENT_NAME"
+          echo "Event path: $GITHUB_EVENT_PATH" 
+          if [ -f "$GITHUB_EVENT_PATH" ]; then
+            echo "Event data preview:"
+            cat "$GITHUB_EVENT_PATH" | jq 'del(.comment.body) | del(.pull_request.body) | del(.issue.body)' || echo "Failed to parse event JSON"
           fi
 
           # 메시지가 비어있지 않은 경우에만 출력
