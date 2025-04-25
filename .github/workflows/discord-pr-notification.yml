@@ -17,12 +17,42 @@ jobs:
   notify_discord:
     runs-on: ubuntu-latest
     steps:
+      - name: Extract event data
+        id: extract_data
+        shell: bash
+        run: |
+          # 이벤트 타입과 기본 정보 추출
+          EVENT_NAME="${{ github.event_name }}"
+          echo "event_name=$EVENT_NAME" >> $GITHUB_OUTPUT
+          
+          # 중복 알림 방지를 위한 이벤트 세부 정보 추출
+          if [ "$EVENT_NAME" = "pull_request_review_comment" ]; then
+            echo "comment_id=${{ github.event.comment.id }}" >> $GITHUB_OUTPUT
+            echo "reply_status=$([ -n "${{ github.event.comment.in_reply_to_id }}" ] && echo "reply" || echo "original")" >> $GITHUB_OUTPUT
+          elif [ "$EVENT_NAME" = "pull_request_review" ]; then
+            echo "review_id=${{ github.event.review.id }}" >> $GITHUB_OUTPUT
+            echo "has_comments=$([ -n "${{ github.event.review.body }}" ] && [ "${{ github.event.review.body }}" != "null" ] && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+          fi
+
       - name: Determine Discord message
         id: set_message
         shell: bash
+        env:
+          EVENT_NAME: ${{ steps.extract_data.outputs.event_name }}
+          REPLY_STATUS: ${{ steps.extract_data.outputs.reply_status }}
+          HAS_REVIEW_COMMENTS: ${{ steps.extract_data.outputs.has_comments }}
         run: |
-          EVENT_NAME="${{ github.event_name }}"
           MESSAGE=""
+          
+          # PR 리뷰 이벤트 - 코멘트가 없거나 리뷰 상태가 "commented"인 경우 스킵
+          # 이는 파일 코드 라인 코멘트가 PR 리뷰로도 등록되는 경우를 방지합니다
+          if [ "$EVENT_NAME" = "pull_request_review" ]; then
+            REVIEW_STATE="${{ github.event.review.state }}"
+            if [ "$HAS_REVIEW_COMMENTS" = "false" ] && [ "$REVIEW_STATE" = "commented" ]; then
+              echo "Skipping empty review comment notification"
+              exit 0
+            fi
+          fi
 
           if [ "$EVENT_NAME" = "pull_request" ]; then
             ACTION="${{ github.event.action }}"
@@ -48,24 +78,21 @@ jobs:
             URL="${{ github.event.pull_request.html_url }}"
             COMMENT=$(echo "${{ github.event.review.body }}" | sed 's/"/\\"/g' | tr '\n' ' ' | cut -c 1-200)
             
-            # 리뷰 본문이 비어있거나 null이면 메시지를 생성하지 않음 (중복 방지)
-            if [ -z "$COMMENT" ] || [ "$COMMENT" = "null" ]; then
-              if [ "$REVIEW_STATE" = "approved" ]; then
-                MESSAGE=":white_check_mark: **$REVIEWER**님이 Pull Request를 승인했습니다!\\nPull Request: **$TITLE**\\nURL: $URL"
-              elif [ "$REVIEW_STATE" = "changes_requested" ]; then
-                MESSAGE=":warning: **$REVIEWER**님이 Pull Request에 변경을 요청했습니다!\\nPull Request: **$TITLE**\\nURL: $URL"
-              else
-                # 코멘트가 없는 리뷰는 알림 생성하지 않음
-                echo "Empty review comment detected, skipping notification"
-              fi
-            else
-              if [ "$REVIEW_STATE" = "approved" ]; then
+            if [ "$REVIEW_STATE" = "approved" ]; then
+              if [ -n "$COMMENT" ] && [ "$COMMENT" != "null" ]; then
                 MESSAGE=":white_check_mark: **$REVIEWER**님이 Pull Request를 승인했습니다!\\n코멘트: $COMMENT\\nPull Request: **$TITLE**\\nURL: $URL"
-              elif [ "$REVIEW_STATE" = "changes_requested" ]; then
+              else
+                MESSAGE=":white_check_mark: **$REVIEWER**님이 Pull Request를 승인했습니다!\\nPull Request: **$TITLE**\\nURL: $URL"
+              fi
+            elif [ "$REVIEW_STATE" = "changes_requested" ]; then
+              if [ -n "$COMMENT" ] && [ "$COMMENT" != "null" ]; then
                 MESSAGE=":warning: **$REVIEWER**님이 Pull Request에 변경을 요청했습니다!\\n코멘트: $COMMENT\\nPull Request: **$TITLE**\\nURL: $URL"
               else
-                MESSAGE=":speech_balloon: **$REVIEWER**님이 리뷰 코멘트를 남겼습니다!\\nPull Request: **$TITLE**\\n코멘트: $COMMENT\\nURL: $URL"
+                MESSAGE=":warning: **$REVIEWER**님이 Pull Request에 변경을 요청했습니다!\\nPull Request: **$TITLE**\\nURL: $URL"
               fi
+            elif [ "$REVIEW_STATE" = "commented" ] && [ -n "$COMMENT" ] && [ "$COMMENT" != "null" ]; then
+              # 단일 코드 라인 코멘트 이벤트와 중복되지 않도록 전체 PR 코멘트만 처리
+              MESSAGE=":speech_balloon: **$REVIEWER**님이 PR 전체에 리뷰 코멘트를 남겼습니다!\\nPull Request: **$TITLE**\\n코멘트: $COMMENT\\nURL: $URL"
             fi
           
           elif [ "$EVENT_NAME" = "pull_request_review_comment" ]; then
@@ -84,7 +111,7 @@ jobs:
             LINE="${{ github.event.comment.line }}"
             
             # 답글인지 확인하고 아이콘과 메시지 포맷 변경
-            if [ -n "${{ github.event.comment.in_reply_to_id }}" ]; then
+            if [ "$REPLY_STATUS" = "reply" ]; then
               MESSAGE=":twisted_rightwards_arrows: **$AUTHOR**님이 파일 코드 코멘트에 답글을 남겼습니다!\\nPR: **$PR_TITLE**\\n파일: \`$FILE_PATH:$LINE\`\\n답글: $COMMENT_BODY\\nURL: $COMMENT_URL"
             else
               MESSAGE=":mag: **$AUTHOR**님이 파일 코드 라인에 코멘트를 남겼습니다!\\nPR: **$PR_TITLE**\\n파일: \`$FILE_PATH:$LINE\`\\n코멘트: $COMMENT_BODY\\nURL: $COMMENT_URL"
@@ -152,9 +179,6 @@ jobs:
           DISCORD_MESSAGE: ${{ steps.set_message.outputs.discord_message }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          # 이벤트 중복 방지를 위한 자동 딜레이 (1-3초 사이 랜덤 대기)
-          sleep $(( ( RANDOM % 3 ) + 1 ))
-          
           # 정확한 JSON 형식으로 페이로드 생성
           payload=$(cat <<EOF
           {
@@ -163,16 +187,24 @@ jobs:
           EOF
           )
           
-          # -f 옵션으로 응답을 확인하고 실패 시 출력
-          response=$(curl -s -f -H "Content-Type: application/json" \
-            -d "$payload" \
-            "$DISCORD_WEBHOOK_URL" || echo "FAILED")
+          # curl 명령에 오류 출력 및 재시도 로직 추가
+          max_retries=3
+          for ((i=1; i<=max_retries; i++)); do
+            response=$(curl -s -f -H "Content-Type: application/json" \
+              -d "$payload" \
+              "$DISCORD_WEBHOOK_URL" 2>&1)
             
-          if [[ "$response" == "FAILED" ]]; then
-            echo "Discord webhook failed"
-            echo "Payload was:"
-            echo "$payload" | sed 's/"content": ".*"/"content": "[REDACTED]"/'
-            exit 1
-          else
-            echo "Discord notification sent successfully!"
-          fi
+            if [ $? -eq 0 ]; then
+              echo "Discord notification sent successfully!"
+              exit 0
+            else
+              echo "Attempt $i failed: $response"
+              if [ $i -lt $max_retries ]; then
+                echo "Retrying in 2 seconds..."
+                sleep 2
+              else
+                echo "All attempts failed"
+                exit 1
+              fi
+            fi
+          done
